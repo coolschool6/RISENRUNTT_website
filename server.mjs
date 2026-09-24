@@ -3,15 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
-import {DatabaseSync} from 'node:sqlite';
 import {neon} from '@neondatabase/serverless';
 import {seedEvents} from './seed.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
-const cloud=Boolean(process.env.DATABASE_URL);
+const cloud=Boolean(process.env.DATABASE_URL),hosted=Boolean(process.env.VERCEL);
 const dataDir=process.env.DATA_DIR||path.join(root,'data');
 if(!cloud){fs.mkdirSync(dataDir,{recursive:true});fs.mkdirSync(path.join(dataDir,'uploads'),{recursive:true});}
-const db=cloud?null:new DatabaseSync(path.join(dataDir,'risenrun.sqlite'));
+let db=null;
+if(!cloud&&!hosted){const {DatabaseSync}=await import('node:sqlite');db=new DatabaseSync(path.join(dataDir,'risenrun.sqlite'));}
 if(db)db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS profiles(id TEXT PRIMARY KEY,body TEXT NOT NULL);
@@ -35,6 +35,7 @@ async function ready(){
   if(!cloudState.settings.has('site')){const site={id:'site',...siteSeed};cloudState.settings.set('site',site);dirty.set('settings:site',site);}
   cloudReady=true;await flush();return;
  }
+ if(!db)fail('The production database is not connected yet.',503);
  if(!db.prepare('SELECT COUNT(*) n FROM events').get().n)for(const e of seedEvents)db.prepare('INSERT INTO events VALUES (?,?)').run(e.id,JSON.stringify(e));
  if(!db.prepare('SELECT id FROM settings WHERE id=?').get('site'))db.prepare('INSERT INTO settings VALUES (?,?)').run('site',JSON.stringify({id:'site',...siteSeed}));
 }
