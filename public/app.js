@@ -17,7 +17,7 @@ const day=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Port_of_Spain'}
 const img=(src,alt,cls='',lazy=true)=>src?`<img src="${esc(src)}" alt="${esc(alt)}" class="${cls}" ${lazy?'loading="lazy"':''}>`:'';
 const artSource='/assets/kyoto-medal.webp';
 const link=(href,text,style='dark')=>`<a class="button ${style}" href="${href}">${text} <span aria-hidden="true">↗</span></a>`;
-let site,events,route=location.pathname.replace(/\/$/,'')||'/',adminState;
+let site,events,route=location.pathname.replace(/\/$/,'')||'/',adminState,adminContent;
 async function api(url,method='GET',data){const headers=data?{'Content-Type':'application/json'}:{};if(url.startsWith('/admin')){let code=sessionStorage.getItem('risenrun-admin-code');if(!code){code=prompt('Enter the Rise & Run TT admin access code.');if(!code)throw new Error('Admin access code required.');sessionStorage.setItem('risenrun-admin-code',code);}headers['X-Risenrun-Admin']=code;}const res=await fetch('/api'+url,{method,headers,body:data?JSON.stringify(data):undefined});const x=await res.json();if(res.status===401&&url.startsWith('/admin')){sessionStorage.removeItem('risenrun-admin-code');}if(!res.ok)throw new Error(x.error||'Unable to complete this action.');return x;}
 function toast(message){$('#toast').textContent=message;$('#toast').classList.add('show');setTimeout(()=>$('#toast').classList.remove('show'),3500);}
 function logo(){return `<a class="logo" href="/" aria-label="Rise & Run TT home">${img('/assets/logo.webp','Rise & Run TT logo','',false)}<div class="wordmark">RISE & RUN<span>TRINIDAD & TOBAGO</span></div></a>`;}
