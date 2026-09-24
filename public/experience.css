@@ -26,5 +26,9 @@
 .card-art img{object-position:center 46%}
 @media(max-width:580px){.event-main-image,.media-edit img,.mini-event img,.run-card img,.upload-preview img{padding:5px}}
 
+/* Preserve the whole keepsake artwork: these panels should frame an image, not crop it. */
+.editorial-photo>img,.story-band img{object-fit:contain!important;background:#eee8dc;object-position:center}
+.editorial-photo{background:#eee8dc}
+
 /* Account entry points stay visible without overpowering the event CTA. */
 .account-actions{display:flex;align-items:center;gap:8px;white-space:nowrap}.account-actions a,.account-actions button{font:700 9px/1 'DM Sans',sans-serif;letter-spacing:.04em;text-decoration:none;cursor:pointer}.account-login{color:var(--navy);padding:10px 7px}.account-login:hover{color:#a78045}.account-signup,.account-dashboard{border:1px solid var(--navy);background:#fff;color:var(--navy);padding:9px 11px;border-radius:2px}.account-signup:hover,.account-dashboard:hover{background:var(--navy);color:#fff}.account-logout{border:0;background:transparent;color:var(--muted);padding:8px 2px}.account-logout:hover{color:#a78045}@media(max-width:800px){.account-actions{order:3}.account-login{display:none}.account-signup,.account-dashboard{padding:8px 9px;font-size:8px}.account-logout{display:none}}@media(max-width:500px){.account-actions{display:none}}

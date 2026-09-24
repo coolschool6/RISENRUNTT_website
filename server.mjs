@@ -274,7 +274,8 @@ export async function handler(req,res){
   if(p==='/api/admin/settings'&&method==='PUT'){
    const x=await body(req);x.id='site';x.name=required(x.name,'Organization name',100);if(!emailValid(x.email))fail('Enter a valid contact email.');
    x.maxUploadMB=Number(x.maxUploadMB);if(!Number.isFinite(x.maxUploadMB)||x.maxUploadMB<1||x.maxUploadMB>20)fail('Upload limit must be 1–20 MB.');
-   for(const k of ['tagline','phone','instagram'])x[k]=String(x[k]||'').slice(0,250);
+   for(const k of ['tagline','phone','instagram','homeEditorialHeading','homeEditorialCopy','homeStoryHeading','homeStoryCopy'])x[k]=String(x[k]||'').slice(0,2000);
+   for(const k of ['homeEditorialImage','homeStoryImage']){x[k]=String(x[k]||'');if(x[k]&&!imagePath(x[k]))fail('Use an uploaded image for home-page artwork.');}
    if(!/^https:\/\/www\.instagram\.com\/[\w.]+\/?$/.test(x.instagram))fail('Use a valid Instagram profile URL.');return json(res,200,save('settings',x));
   }
   if(p.startsWith('/api/'))fail('This action was not found.',404);
