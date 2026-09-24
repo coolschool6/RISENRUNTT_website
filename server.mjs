@@ -186,7 +186,7 @@ export async function handler(req,res){
   }
   if(p==='/api/results'&&method==='GET')return json(res,200,results(url.searchParams.get('event')));
   if(p==='/api/submissions'&&method==='POST'){
-   if(cloud&&!user)fail('Create an account or sign in before submitting your run.',401);
+   if(!user)fail('Create an account or sign in before submitting your run.',401);
    const x=await body(req),e=get('events',x.eventId);if(!e||e.status!=='open')fail('This event is not accepting submissions.');
    const now=today();if(e.startDate&&now<e.startDate)fail(`This event opens on ${e.startDate}.`);
    if(e.deadline&&now>e.deadline&&!e.allowLate)fail('The submission deadline has passed.');
@@ -266,7 +266,7 @@ export async function handler(req,res){
   if(p.startsWith('/api/'))fail('This action was not found.',404);
   if(cloud&&p==='/admin'&&session?.role!=='admin'){res.writeHead(302,{Location:'/login?role=admin'});res.end();return;}
   if(cloud&&/^\/events\/[^/]+\/submit$/.test(p)&&!user){res.writeHead(302,{Location:'/signup'});res.end();return;}
-  if(p.startsWith('/assets/')||['/app.js','/styles.css','/experience.js','/experience.css','/completion.js','/auth.js','/auth.css'].includes(p)){
+  if(p.startsWith('/assets/')||['/app.js','/styles.css','/experience.js','/experience.css','/completion.js','/auth.js','/auth.css','/account-nav.js'].includes(p)){
    const target=path.resolve(root,'public','.'+p);if(!target.startsWith(path.join(root,'public')+path.sep))fail('Not found.',404);return file(res,target);
   }
   if(method!=='GET')fail('Method not allowed.',405);
