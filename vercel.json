@@ -1,7 +1,6 @@
 {
   "rewrites": [
     {"source":"/events/:path*","destination":"/index.html"},
-    {"source":"/results/:path*","destination":"/index.html"},
     {"source":"/my-runs/:path*","destination":"/index.html"},
     {"source":"/profile/:path*","destination":"/index.html"},
     {"source":"/how-it-works/:path*","destination":"/index.html"},
