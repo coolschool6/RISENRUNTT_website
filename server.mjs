@@ -64,6 +64,14 @@ const save=(t,x)=>{
  return x;
 };
 const remove=(t,id)=>{if(cloud){cloudState[t].delete(id);dirty.set(`${t}:${id}`,null);}else db.prepare(`DELETE FROM ${t} WHERE id=?`).run(id);};
+async function deleteEvent(id){
+ const submissions=all('submissions').filter(x=>x.eventId===id),participants=all('participants').filter(x=>x.eventId===id);
+ for(const submission of submissions)remove('submissions',submission.id);
+ for(const participant of participants)remove('participants',participant.id);
+ remove('events',id);
+ if(cloud)await neon(process.env.DATABASE_URL).query('DELETE FROM risenrun_submission_claims WHERE event_id=$1',[id]);
+ return {submissions:submissions.length,participants:participants.length};
+}
 async function reserveSubmission(eventId,profileId,email){
  if(!cloud)return true;
  const sql=neon(process.env.DATABASE_URL),result=await sql.query('INSERT INTO risenrun_submission_claims (event_id,profile_id,email) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING event_id',[eventId,profileId,email]);
@@ -131,6 +139,8 @@ function validateEvent(input,existing){
  e.pickupLocations=Array.isArray(e.pickupLocations)?e.pickupLocations.map(s=>String(s).slice(0,150)):[];
  for(const k of ['subtitle','series','location','collection','medalDescription'])e[k]=String(e[k]||'').slice(0,2000);
  for(const k of ['allowLate','allowResubmit','requireEnrollment'])e[k]=e[k]===true;
+ e.homeFeatured=e.homeFeatured===true;
+ e.homePosition=Number(e.homePosition);if(!Number.isInteger(e.homePosition)||e.homePosition<1||e.homePosition>99)e.homePosition=99;
  e.updatedAt=new Date().toISOString();return e;
 }
 function participant(input){
@@ -243,7 +253,7 @@ export async function handler(req,res){
   if(/^\/api\/admin\/events\/[^/]+$/.test(p)){
    const id=p.split('/').pop(),e=get('events',id);if(!e)fail('Event not found.',404);
    if(method==='PUT')return json(res,200,save('events',validateEvent(await body(req),e)));
-   if(method==='DELETE'){if(e.status!=='draft')fail('Only draft events can be deleted.');if(all('submissions').some(s=>s.eventId===id)||all('participants').some(x=>x.eventId===id))fail('This draft contains participant records. Keep it as a draft.');remove('events',id);return json(res,200,{ok:true});}
+   if(method==='DELETE'){const removed=await deleteEvent(id);return json(res,200,{ok:true,...removed});}
   }
   if(p==='/api/admin/media'&&method==='POST'){
    const im=readableImage((await body(req)).image),base='public-'+uuid(),name=cloud?base:base+'.'+im.ext;await storeMedia(name,im);return json(res,201,{url:cloud?'/api/media/'+name:'/media/'+name});

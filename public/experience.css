@@ -30,5 +30,15 @@
 .editorial-photo>img,.story-band img{object-fit:contain!important;background:#eee8dc;object-position:center}
 .editorial-photo{background:#eee8dc}
 
+/* Homepage artwork keeps the exact proportions of the image an organizer uploads. */
+.editorial-photo{aspect-ratio:auto;overflow:visible}
+.editorial-photo>img,.story-band img{width:100%;height:auto;object-fit:initial!important}
+.story-band{min-height:0;align-items:center}
+.media-edit [id$="-preview"]{cursor:pointer;border-radius:5px;transition:box-shadow .2s,transform .2s}
+.media-edit [id$="-preview"]:hover,.media-edit [id$="-preview"]:focus{box-shadow:0 0 0 3px #d7ae6480;transform:translateY(-1px);outline:0}
+.home-feature-control{display:grid;grid-template-columns:1fr 120px;gap:14px;align-items:center;padding:14px;background:#f0ece2;border-radius:5px}
+.home-feature-control .field-help{grid-column:1/-1;margin:0}.delete-help{align-self:center;color:#9a372d;font-size:11px;max-width:260px}
+@media(max-width:580px){.story-band img{height:auto}.home-feature-control{grid-template-columns:1fr}}
+
 /* Account entry points stay visible without overpowering the event CTA. */
 .account-actions{display:flex;align-items:center;gap:8px;white-space:nowrap}.account-actions a,.account-actions button{font:700 9px/1 'DM Sans',sans-serif;letter-spacing:.04em;text-decoration:none;cursor:pointer}.account-login{color:var(--navy);padding:10px 7px}.account-login:hover{color:#a78045}.account-signup,.account-dashboard{border:1px solid var(--navy);background:#fff;color:var(--navy);padding:9px 11px;border-radius:2px}.account-signup:hover,.account-dashboard:hover{background:var(--navy);color:#fff}.account-logout{border:0;background:transparent;color:var(--muted);padding:8px 2px}.account-logout:hover{color:#a78045}@media(max-width:800px){.account-actions{order:3}.account-login{display:none}.account-signup,.account-dashboard{padding:8px 9px;font-size:8px}.account-logout{display:none}}@media(max-width:500px){.account-actions{display:none}}
