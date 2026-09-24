@@ -72,6 +72,14 @@ async function deleteEvent(id){
  if(cloud)await neon(process.env.DATABASE_URL).query('DELETE FROM risenrun_submission_claims WHERE event_id=$1',[id]);
  return {submissions:submissions.length,participants:participants.length};
 }
+async function deleteUser(id){
+ const user=get('users',id);if(!user)fail('Runner account not found.',404);
+ const submissions=all('submissions').filter(x=>x.profileId===id);
+ for(const submission of submissions)remove('submissions',submission.id);
+ remove('profiles',id);remove('users',id);
+ if(cloud)await neon(process.env.DATABASE_URL).query('DELETE FROM risenrun_submission_claims WHERE profile_id=$1',[id]);
+ return {submissions:submissions.length};
+}
 async function reserveSubmission(eventId,profileId,email){
  if(!cloud)return true;
  const sql=neon(process.env.DATABASE_URL),result=await sql.query('INSERT INTO risenrun_submission_claims (event_id,profile_id,email) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING event_id',[eventId,profileId,email]);
@@ -249,6 +257,7 @@ export async function handler(req,res){
   }
   // Local management intentionally has no login, as requested. The server binds to loopback only.
   if(p==='/api/admin/state'&&method==='GET')return json(res,200,{events:all('events'),participants:all('participants'),submissions:all('submissions'),users:all('users').map(publicUser),settings:get('settings','site')});
+  if(/^\/api\/admin\/users\/[^/]+$/.test(p)&&method==='DELETE')return json(res,200,{ok:true,...await deleteUser(p.split('/').pop())});
   if(p==='/api/admin/events'&&method==='POST')return json(res,201,save('events',validateEvent(await body(req))));
   if(/^\/api\/admin\/events\/[^/]+$/.test(p)){
    const id=p.split('/').pop(),e=get('events',id);if(!e)fail('Event not found.',404);
