@@ -214,7 +214,7 @@ export async function handler(req,res){
    // instance before its profile record has been read back from storage.  The
    // signed-in account remains the source of truth for these core fields.
    const profile=get('profiles',profileId);
-   return json(res,200,profile||{id:profileId,name:user?.name||'',displayName:user?.displayName||'',email:user?.email||'',country:'Trinidad & Tobago'});
+   return json(res,200,{id:profile?.id||profileId,name:profile?.name||user?.name||'',displayName:profile?.displayName||user?.displayName||'',email:profile?.email||user?.email||'',country:profile?.country||'Trinidad & Tobago'});
   }
   if(p==='/api/profile'&&method==='PUT'){
    const x=await body(req);x.id=profileId;x.name=required(x.name,'Name',120);x.displayName=required(x.displayName,'Display name',80);if(!emailValid(x.email))fail('Enter a valid email.');x.email=x.email.toLowerCase();x.country=String(x.country||'').slice(0,100);return json(res,200,save('profiles',x));
