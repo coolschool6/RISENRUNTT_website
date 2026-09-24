@@ -288,7 +288,7 @@ export async function handler(req,res){
   if(p.startsWith('/api/'))fail('This action was not found.',404);
   if(cloud&&p==='/admin'&&session?.role!=='admin'){res.writeHead(302,{Location:'/login?role=admin'});res.end();return;}
   if(cloud&&/^\/events\/[^/]+\/submit$/.test(p)&&!user){res.writeHead(302,{Location:'/signup'});res.end();return;}
-  if(p.startsWith('/assets/')||['/app.js','/styles.css','/experience.js','/experience.css','/completion.js','/auth.js','/auth.css','/account-nav.js','/recovery.js'].includes(p)){
+  if(p.startsWith('/assets/')||['/app.js','/styles.css','/experience.js','/experience.css','/completion.js','/auth.js','/auth.css','/account-nav.js','/recovery.js','/share-tools.js'].includes(p)){
    const target=path.resolve(root,'public','.'+p);if(!target.startsWith(path.join(root,'public')+path.sep))fail('Not found.',404);return file(res,target);
   }
   if(method!=='GET')fail('Method not allowed.',405);
