@@ -1,0 +1,13 @@
+# Local runtime state: never publish runner details, activity evidence, or SQLite files.
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Local tooling and generated files
+node_modules/
+.vercel/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
