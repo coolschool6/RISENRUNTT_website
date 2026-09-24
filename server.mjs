@@ -4,35 +4,62 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
+import {neon} from '@neondatabase/serverless';
 import {seedEvents} from './seed.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
+const cloud=Boolean(process.env.DATABASE_URL);
 const dataDir=process.env.DATA_DIR||path.join(root,'data');
-fs.mkdirSync(dataDir,{recursive:true});
-fs.mkdirSync(path.join(dataDir,'uploads'),{recursive:true});
-const db=new DatabaseSync(path.join(dataDir,'risenrun.sqlite'));
-db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+if(!cloud){fs.mkdirSync(dataDir,{recursive:true});fs.mkdirSync(path.join(dataDir,'uploads'),{recursive:true});}
+const db=cloud?null:new DatabaseSync(path.join(dataDir,'risenrun.sqlite'));
+if(db)db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS profiles(id TEXT PRIMARY KEY,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS participants(id TEXT PRIMARY KEY,event_id TEXT NOT NULL REFERENCES events(id),body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS submissions(id TEXT PRIMARY KEY,event_id TEXT NOT NULL REFERENCES events(id),profile_id TEXT NOT NULL,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings(id TEXT PRIMARY KEY,body TEXT NOT NULL);`);
-if(!db.prepare('SELECT COUNT(*) n FROM events').get().n) for(const e of seedEvents) db.prepare('INSERT INTO events VALUES (?,?)').run(e.id,JSON.stringify(e));
-if(!db.prepare('SELECT id FROM settings WHERE id=?').get('site')) db.prepare('INSERT INTO settings VALUES (?,?)').run('site',JSON.stringify({name:'Rise & Run TT',tagline:'Encourage fitness & health anywhere.',email:'risenruntt@gmail.com',phone:'18683925275',instagram:'https://www.instagram.com/riserun.tt/',maxUploadMB:10}));
-const all=t=>db.prepare(`SELECT body FROM ${t}`).all().map(x=>JSON.parse(x.body));
-const get=(t,id)=>{const r=db.prepare(`SELECT body FROM ${t} WHERE id=?`).get(id);return r?JSON.parse(r.body):null;};
+const collections=['events','profiles','participants','submissions','settings'];
+const cloudState=Object.fromEntries(collections.map(key=>[key,new Map()]));
+const dirty=new Map();
+let cloudReady=false;
+const siteSeed={name:'Rise & Run TT',tagline:'Encourage fitness & health anywhere.',email:'risenruntt@gmail.com',phone:'18683925275',instagram:'https://www.instagram.com/riserun.tt/',maxUploadMB:10};
+async function ready(){
+ if(cloud){
+  if(cloudReady)return;
+  const sql=neon(process.env.DATABASE_URL);
+  await sql('CREATE TABLE IF NOT EXISTS risenrun_records (collection text NOT NULL, id text NOT NULL, body jsonb NOT NULL, PRIMARY KEY (collection, id))');
+  await sql('CREATE TABLE IF NOT EXISTS risenrun_media (id text PRIMARY KEY, bytes bytea NOT NULL, content_type text NOT NULL)');
+  const rows=await sql('SELECT collection, id, body FROM risenrun_records');
+  for(const row of rows)if(cloudState[row.collection])cloudState[row.collection].set(row.id,typeof row.body==='string'?JSON.parse(row.body):row.body);
+  if(!cloudState.events.size)for(const e of seedEvents){cloudState.events.set(e.id,e);dirty.set(`events:${e.id}`,e);}
+  if(!cloudState.settings.has('site')){const site={id:'site',...siteSeed};cloudState.settings.set('site',site);dirty.set('settings:site',site);}
+  cloudReady=true;await flush();return;
+ }
+ if(!db.prepare('SELECT COUNT(*) n FROM events').get().n)for(const e of seedEvents)db.prepare('INSERT INTO events VALUES (?,?)').run(e.id,JSON.stringify(e));
+ if(!db.prepare('SELECT id FROM settings WHERE id=?').get('site'))db.prepare('INSERT INTO settings VALUES (?,?)').run('site',JSON.stringify({id:'site',...siteSeed}));
+}
+async function flush(){
+ if(!cloud||!dirty.size)return;
+ const sql=neon(process.env.DATABASE_URL),changes=[...dirty.entries()];dirty.clear();
+ for(const [key,value] of changes){const [collection,id]=key.split(':');if(value===null)await sql('DELETE FROM risenrun_records WHERE collection = $1 AND id = $2',[collection,id]);else await sql('INSERT INTO risenrun_records (collection,id,body) VALUES ($1,$2,$3::jsonb) ON CONFLICT (collection,id) DO UPDATE SET body=EXCLUDED.body',[collection,id,JSON.stringify(value)]);}
+}
+const all=t=>cloud?[...cloudState[t].values()]:db.prepare(`SELECT body FROM ${t}`).all().map(x=>JSON.parse(x.body));
+const get=(t,id)=>cloud?(cloudState[t].get(id)||null):(()=>{const r=db.prepare(`SELECT body FROM ${t} WHERE id=?`).get(id);return r?JSON.parse(r.body):null;})();
 const save=(t,x)=>{
+ if(cloud){cloudState[t].set(x.id,x);dirty.set(`${t}:${x.id}`,x);return x;}
  const body=JSON.stringify(x);
  if(t==='submissions')db.prepare('INSERT OR REPLACE INTO submissions VALUES (?,?,?,?)').run(x.id,x.eventId,x.profileId,body);
  else if(t==='participants')db.prepare('INSERT OR REPLACE INTO participants VALUES (?,?,?)').run(x.id,x.eventId,body);
  else db.prepare(`INSERT OR REPLACE INTO ${t} VALUES (?,?)`).run(x.id,body);
  return x;
 };
+const remove=(t,id)=>{if(cloud){cloudState[t].delete(id);dirty.set(`${t}:${id}`,null);}else db.prepare(`DELETE FROM ${t} WHERE id=?`).run(id);};
 const fail=(message,status=400)=>{throw Object.assign(new Error(message),{status});};
 const required=(value,label,max=500)=>{if(typeof value!=='string'||!value.trim()||value.length>max)fail(`${label} is required (maximum ${max} characters).`);return value.trim();};
 const dateValid=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&!Number.isNaN(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Port_of_Spain'}).format(new Date());
 const uuid=()=>crypto.randomUUID();
+const adminSignature=()=>process.env.ADMIN_PASSWORD?crypto.createHmac('sha256',process.env.ADMIN_PASSWORD).update('rise-run-admin').digest('hex'):'';
 const emailValid=s=>typeof s==='string'&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)&&s.length<255;
 const publicResult=s=>({id:s.id,eventId:s.eventId,displayName:s.displayName,distance:s.distance,seconds:s.seconds,activityDate:s.activityDate,activity:s.activity,createdAt:s.reviewedAt});
 const results=id=>all('submissions').filter(s=>s.status==='approved'&&(!id||s.eventId===id)).sort((a,b)=>a.seconds-b.seconds).map((s,i)=>({...publicResult(s),rank:i+1}));
@@ -47,7 +74,15 @@ const readableImage=(data)=>{
  if(!valid)fail('The file contents do not match a supported image.');
  return {bytes,ext:match[1]==='jpeg'?'jpg':match[1]};
 };
-const imagePath=s=>typeof s==='string'&&/^\/(assets\/[\w.-]+|media\/[\w.-]+)$/.test(s);
+const imagePath=s=>typeof s==='string'&&/^\/(assets\/[\w.-]+|media\/[\w.-]+|api\/media\/[\w.-]+)$/.test(s);
+async function storeMedia(id,image){
+ if(cloud){const sql=neon(process.env.DATABASE_URL);await sql('INSERT INTO risenrun_media (id,bytes,content_type) VALUES ($1,$2,$3) ON CONFLICT (id) DO UPDATE SET bytes=EXCLUDED.bytes,content_type=EXCLUDED.content_type',[id,image.bytes,`image/${image.ext==='jpg'?'jpeg':image.ext}`]);return;}
+ fs.writeFileSync(path.join(dataDir,'uploads',id),image.bytes);
+}
+async function sendMedia(res,id,privateFile=false){
+ if(cloud){const sql=neon(process.env.DATABASE_URL),rows=await sql('SELECT bytes,content_type FROM risenrun_media WHERE id=$1',[id]);if(!rows.length)fail('File not found.',404);res.writeHead(200,{'Content-Type':rows[0].content_type,'Cache-Control':privateFile?'no-store':'public, max-age=3600'});res.end(Buffer.from(rows[0].bytes));return;}
+ const match=/^(.+)\.(jpg|png|webp)$/.exec(id);if(!match)fail('File not found.',404);return file(res,path.join(dataDir,'uploads',id),privateFile);
+}
 function validateEvent(input,existing){
  const e={...existing,...input};
  e.name=required(e.name,'Event name',100);e.description=required(e.description,'Description',6000);
@@ -78,18 +113,26 @@ function participant(input){
  return x;
 }
 async function body(req){let size=0;const chunks=[];for await(const c of req){size+=c.length;if(size>30*1024*1024)fail('Request too large.',413);chunks.push(c);}try{return JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{fail('Invalid request data.');}}
-function json(res,status,value){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));}
+async function json(res,status,value){await flush();res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));}
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.webp':'image/webp','.jpg':'image/jpeg','.png':'image/png','.svg':'image/svg+xml','.woff2':'font/woff2'};
 function file(res,p,privateFile=false){if(!fs.existsSync(p)||!fs.statSync(p).isFile())fail('File not found.',404);const ext=path.extname(p);res.writeHead(200,{'Content-Type':mime[ext]||'application/octet-stream','Cache-Control':privateFile||['.html','.js','.css'].includes(ext)?'no-store':'public, max-age=3600'});fs.createReadStream(p).pipe(res);}
-const server=http.createServer(async(req,res)=>{
+export async function handler(req,res){
  try{
   const host=req.headers.host||'';
-  if(!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host))fail('Local access only.',403);
+  if(!cloud&&!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host))fail('Local access only.',403);
   if(req.headers.origin&&!['http://'+host].includes(req.headers.origin))fail('Requests must originate from this website.',403);
+  await ready();
   res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
   const url=new URL(req.url,'http://'+host),p=decodeURIComponent(url.pathname),method=req.method;
-  const cookie=(req.headers.cookie||'').match(/(?:^|;\s*)rr_device=([a-f0-9-]{36})(?:;|$)/)?.[1];
-  const device=cookie||uuid();if(!cookie)res.setHeader('Set-Cookie',`rr_device=${device}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
+  const cookies=req.headers.cookie||'';
+  const cookie=cookies.match(/(?:^|;\s*)rr_device=([a-f0-9-]{36})(?:;|$)/)?.[1];
+  const device=cookie||uuid();const addCookie=value=>{const old=res.getHeader('Set-Cookie');res.setHeader('Set-Cookie',old?[].concat(old,value):value);};if(!cookie)addCookie(`rr_device=${device}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${cloud?'; Secure':''}`);
+  if(cloud&&p.startsWith('/api/admin/')){
+   if(!process.env.ADMIN_PASSWORD)fail('Admin access is not configured. Add ADMIN_PASSWORD in Vercel project settings.',503);
+   const saved=cookies.match(/(?:^|;\s*)rr_admin=([a-f0-9]+)(?:;|$)/)?.[1],provided=req.headers['x-risenrun-admin'];
+   if(provided===process.env.ADMIN_PASSWORD)addCookie(`rr_admin=${adminSignature()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800; Secure`);
+   else if(saved!==adminSignature())fail('Admin access code required.',401);
+  }
   if(p==='/api/site'&&method==='GET')return json(res,200,get('settings','site'));
   if(p==='/api/events'&&method==='GET')return json(res,200,all('events').filter(e=>e.status!=='draft'));
   if(p==='/api/profile'&&method==='GET')return json(res,200,get('profiles',device)||{id:device,name:'',displayName:'',email:'',country:'Trinidad & Tobago'});
@@ -127,7 +170,7 @@ const server=http.createServer(async(req,res)=>{
    }else{
     const im=readableImage(x.image);fingerprint=crypto.createHash('sha256').update(im.bytes).digest('hex');
     if(all('submissions').some(s=>s.fingerprint===fingerprint))flags.push('Screenshot previously submitted');
-    evidence=uuid()+'.'+im.ext;fs.writeFileSync(path.join(dataDir,'uploads',evidence),im.bytes);
+    evidence=cloud?uuid():uuid()+'.'+im.ext;await storeMedia(evidence,im);
    }
    if(seconds/distance<150||seconds/distance>1800)flags.push('Unusual pace — check activity details');
    const s={id:uuid(),eventId:e.id,profileId:device,displayName,email,bib:roster?.bib||'',distance,seconds,activity:x.activity,activityDate:x.activityDate,method:x.method,stravaUrl,evidence,fingerprint,notes:String(x.notes||'').slice(0,2000),status:'pending',flags,reason:'',createdAt:new Date().toISOString()};
@@ -143,14 +186,15 @@ const server=http.createServer(async(req,res)=>{
   if(/^\/api\/admin\/events\/[^/]+$/.test(p)){
    const id=p.split('/').pop(),e=get('events',id);if(!e)fail('Event not found.',404);
    if(method==='PUT')return json(res,200,save('events',validateEvent(await body(req),e)));
-   if(method==='DELETE'){if(e.status!=='draft')fail('Only draft events can be deleted.');if(all('submissions').some(s=>s.eventId===id)||all('participants').some(x=>x.eventId===id))fail('This draft contains participant records. Keep it as a draft.');db.prepare('DELETE FROM events WHERE id=?').run(id);return json(res,200,{ok:true});}
+   if(method==='DELETE'){if(e.status!=='draft')fail('Only draft events can be deleted.');if(all('submissions').some(s=>s.eventId===id)||all('participants').some(x=>x.eventId===id))fail('This draft contains participant records. Keep it as a draft.');remove('events',id);return json(res,200,{ok:true});}
   }
   if(p==='/api/admin/media'&&method==='POST'){
-   const im=readableImage((await body(req)).image),name='public-'+uuid()+'.'+im.ext;fs.writeFileSync(path.join(dataDir,'uploads',name),im.bytes);return json(res,201,{url:'/media/'+name});
+   const im=readableImage((await body(req)).image),base='public-'+uuid(),name=cloud?base:base+'.'+im.ext;await storeMedia(name,im);return json(res,201,{url:cloud?'/api/media/'+name:'/media/'+name});
   }
+  if(/^\/api\/media\/public-[a-f0-9-]+$/.test(p)&&method==='GET')return sendMedia(res,p.split('/').pop());
   if(/^\/media\/public-[a-f0-9-]+\.(jpg|png|webp)$/.test(p))return file(res,path.join(dataDir,'uploads',path.basename(p)));
   if(/^\/api\/admin\/evidence\/[^/]+$/.test(p)&&method==='GET'){
-   const s=get('submissions',p.split('/').pop());if(!s?.evidence)fail('No screenshot for this submission.',404);return file(res,path.join(dataDir,'uploads',s.evidence),true);
+   const s=get('submissions',p.split('/').pop());if(!s?.evidence)fail('No screenshot for this submission.',404);return sendMedia(res,s.evidence,true);
   }
   if(/^\/api\/admin\/submissions\/[^/]+$/.test(p)&&method==='PATCH'){
    const s=get('submissions',p.split('/').pop()),x=await body(req);if(!s)fail('Submission not found.',404);
@@ -183,5 +227,5 @@ const server=http.createServer(async(req,res)=>{
   if(p==='/'||p==='/RISENRUNTT_website.html'||/^\/(events|results|my-runs|profile|how-it-works|about|faq|admin)(\/[^.]*)?$/.test(p))return file(res,path.join(root,'public','index.html'),true);
   fail('Page not found.',404);
  }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.status?e.message:'Something went wrong. Please try again.'});else res.end();if(!e.status)console.error(e);}
-});
-server.listen(Number(process.env.PORT||4173),'127.0.0.1',()=>console.log(`Rise & Run TT: http://localhost:${process.env.PORT||4173} — local storage ready`));
+}
+if(!process.env.VERCEL){const server=http.createServer(handler);server.listen(Number(process.env.PORT||4173),'127.0.0.1',()=>console.log(`Rise & Run TT: http://localhost:${process.env.PORT||4173} — local storage ready`));}
