@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {neon} from '@neondatabase/serverless';
 import {seedEvents} from './seed.mjs';
@@ -17,8 +18,9 @@ CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS profiles(id TEXT PRIMARY KEY,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS participants(id TEXT PRIMARY KEY,event_id TEXT NOT NULL REFERENCES events(id),body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS submissions(id TEXT PRIMARY KEY,event_id TEXT NOT NULL REFERENCES events(id),profile_id TEXT NOT NULL,body TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS settings(id TEXT PRIMARY KEY,body TEXT NOT NULL);`);
-const collections=['events','profiles','participants','submissions','settings'];
+CREATE TABLE IF NOT EXISTS settings(id TEXT PRIMARY KEY,body TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,body TEXT NOT NULL);`);
+const collections=['events','profiles','participants','submissions','settings','users'];
 const cloudState=Object.fromEntries(collections.map(key=>[key,new Map()]));
 const dirty=new Map();
 let cloudSchemaReady=false;
@@ -74,6 +76,12 @@ const dateValid=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&!Number.i
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Port_of_Spain'}).format(new Date());
 const uuid=()=>crypto.randomUUID();
 const adminSignature=()=>process.env.ADMIN_PASSWORD?crypto.createHmac('sha256',process.env.ADMIN_PASSWORD).update('rise-run-admin').digest('hex'):'';
+const sessionSecret=()=>process.env.AUTH_SECRET||(!hosted?'local-development-secret':'');
+const hashPassword=async password=>{const salt=crypto.randomBytes(16).toString('hex'),derived=await promisify(crypto.scrypt)(password,salt,64);return `${salt}:${Buffer.from(derived).toString('hex')}`;};
+const passwordMatches=async(password,stored)=>{const [salt,hash]=String(stored||'').split(':');if(!salt||!hash)return false;const derived=Buffer.from(await promisify(crypto.scrypt)(password,salt,64)),expected=Buffer.from(hash,'hex');return derived.length===expected.length&&crypto.timingSafeEqual(derived,expected);};
+const sessionSignature=(id,role)=>sessionSecret()?crypto.createHmac('sha256',sessionSecret()).update(`${id}:${role}`).digest('hex'):'';
+const sessionValue=(id,role)=>`${id}.${role}.${sessionSignature(id,role)}`;
+const sessionFrom=(cookies)=>{const m=cookies.match(/(?:^|;\s*)rr_session=([a-f0-9-]+)\.(user|admin)\.([a-f0-9]+)(?:;|$)/);if(!m||!sessionSecret()||m[3]!==sessionSignature(m[1],m[2]))return null;return {id:m[1],role:m[2]};};
 const sameHostOrigin=(origin,host)=>origin===`http://${host}`||origin===`https://${host}`;
 const requestAddress=req=>(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').toString().split(',')[0].trim();
 function allowAdminAttempt(req){const key=requestAddress(req),now=Date.now(),attempts=(adminAttempts.get(key)||[]).filter(t=>now-t<15*60*1000);if(attempts.length>=10)return false;attempts.push(now);adminAttempts.set(key,attempts);return true;}
@@ -144,30 +152,48 @@ export async function handler(req,res){
   const cookies=req.headers.cookie||'';
   const cookie=cookies.match(/(?:^|;\s*)rr_device=([a-f0-9-]{36})(?:;|$)/)?.[1];
   const device=cookie||uuid();const addCookie=value=>{const old=res.getHeader('Set-Cookie');res.setHeader('Set-Cookie',old?[].concat(old,value):value);};if(!cookie)addCookie(`rr_device=${device}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${cloud?'; Secure':''}`);
+  const setSession=(id,role)=>addCookie(`rr_session=${sessionValue(id,role)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${cloud?'; Secure':''}`);
+  let session=sessionFrom(cookies),user=session?.role==='user'?get('users',session.id):null;if(session?.role==='user'&&!user)session=null;
+  if(p==='/api/auth/session'&&method==='GET')return json(res,200,{authenticated:Boolean(session),role:session?.role||null,user:user?{id:user.id,name:user.name,displayName:user.displayName,email:user.email}:null});
+  if(p==='/api/auth/signup'&&method==='POST'){
+   if(!sessionSecret())fail('Account setup is not configured yet.',503);
+   const x=await body(req),name=required(x.name,'Name',120),displayName=required(x.displayName,'Display name',80),email=required(x.email,'Email',254).toLowerCase(),password=required(x.password,'Password',200);
+   if(!emailValid(email))fail('Enter a valid email.');if(password.length<8)fail('Choose a password with at least 8 characters.');if(all('users').some(existing=>existing.email===email)||email===String(process.env.ADMIN_EMAIL||'').toLowerCase())fail('An account already exists for this email.',409);
+   const newUser={id:uuid(),name,displayName,email,passwordHash:await hashPassword(password),createdAt:new Date().toISOString()};save('users',newUser);save('profiles',{id:newUser.id,name,displayName,email,country:String(x.country||'Trinidad & Tobago').slice(0,100)});setSession(newUser.id,'user');return json(res,201,{id:newUser.id,name,displayName,email});
+  }
+  if(p==='/api/auth/login'&&method==='POST'){
+   if(!sessionSecret())fail('Account setup is not configured yet.',503);
+   const x=await body(req),email=required(x.email,'Email',254).toLowerCase(),password=required(x.password,'Password',200),adminEmail=String(process.env.ADMIN_EMAIL||'').toLowerCase();
+   if(adminEmail&&email===adminEmail&&password===process.env.ADMIN_PASSWORD){const adminId='admin';setSession(adminId,'admin');addCookie(`rr_admin=${adminSignature()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800; Secure`);return json(res,200,{role:'admin',email:adminEmail});}
+   const found=all('users').find(candidate=>candidate.email===email);if(!found||!await passwordMatches(password,found.passwordHash))fail('Incorrect email or password.',401);setSession(found.id,'user');return json(res,200,{role:'user',user:{id:found.id,name:found.name,displayName:found.displayName,email:found.email}});
+  }
+  if(p==='/api/auth/logout'&&method==='POST'){addCookie(`rr_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${cloud?'; Secure':''}`);addCookie(`rr_admin=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${cloud?'; Secure':''}`);return json(res,200,{ok:true});}
   if(cloud&&p.startsWith('/api/admin/')){
    if(!process.env.ADMIN_PASSWORD)fail('Admin access is not configured. Add ADMIN_PASSWORD in Vercel project settings.',503);
    const saved=cookies.match(/(?:^|;\s*)rr_admin=([a-f0-9]+)(?:;|$)/)?.[1],provided=req.headers['x-risenrun-admin'];
-   if(provided===process.env.ADMIN_PASSWORD)addCookie(`rr_admin=${adminSignature()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800; Secure`);
+   if(session?.role==='admin'||provided===process.env.ADMIN_PASSWORD)addCookie(`rr_admin=${adminSignature()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800; Secure`);
    else if(saved!==adminSignature()){if(!allowAdminAttempt(req))fail('Too many admin access attempts. Try again in 15 minutes.',429);fail('Admin access code required.',401);}
   }
   if(p==='/api/site'&&method==='GET')return json(res,200,get('settings','site'));
   if(p==='/api/events'&&method==='GET')return json(res,200,all('events').filter(e=>e.status!=='draft'));
-  if(p==='/api/profile'&&method==='GET')return json(res,200,get('profiles',device)||{id:device,name:'',displayName:'',email:'',country:'Trinidad & Tobago'});
+  const profileId=user?.id||device;
+  if(p==='/api/profile'&&method==='GET')return json(res,200,get('profiles',profileId)||{id:profileId,name:'',displayName:'',email:'',country:'Trinidad & Tobago'});
   if(p==='/api/profile'&&method==='PUT'){
-   const x=await body(req);x.id=device;x.name=required(x.name,'Name',120);x.displayName=required(x.displayName,'Display name',80);if(!emailValid(x.email))fail('Enter a valid email.');x.email=x.email.toLowerCase();x.country=String(x.country||'').slice(0,100);return json(res,200,save('profiles',x));
+   const x=await body(req);x.id=profileId;x.name=required(x.name,'Name',120);x.displayName=required(x.displayName,'Display name',80);if(!emailValid(x.email))fail('Enter a valid email.');x.email=x.email.toLowerCase();x.country=String(x.country||'').slice(0,100);return json(res,200,save('profiles',x));
   }
   if(p==='/api/me'&&method==='GET'){
-   const profile=get('profiles',device);return json(res,200,{profile,submissions:all('submissions').filter(s=>s.profileId===device),participants:all('participants').filter(x=>profile&&x.email===profile.email)});
+   const profile=get('profiles',profileId);return json(res,200,{profile,submissions:all('submissions').filter(s=>s.profileId===profileId),participants:all('participants').filter(x=>profile&&x.email===profile.email)});
   }
   if(p==='/api/results'&&method==='GET')return json(res,200,results(url.searchParams.get('event')));
   if(p==='/api/submissions'&&method==='POST'){
+   if(cloud&&!user)fail('Create an account or sign in before submitting your run.',401);
    const x=await body(req),e=get('events',x.eventId);if(!e||e.status!=='open')fail('This event is not accepting submissions.');
    const now=today();if(e.startDate&&now<e.startDate)fail(`This event opens on ${e.startDate}.`);
    if(e.deadline&&now>e.deadline&&!e.allowLate)fail('The submission deadline has passed.');
    const displayName=required(x.displayName,'Display name',80);if(!emailValid(x.email))fail('Enter a valid email.');const email=x.email.trim().toLowerCase();
    const roster=all('participants').find(r=>r.eventId===e.id&&r.email===email&&r.active);
    if(e.requireEnrollment&&!roster)fail('Your email is not on this event’s participant list. Contact the organizer.');
-   const previous=all('submissions').filter(s=>s.eventId===e.id&&(s.profileId===device||s.email===email));
+   const previous=all('submissions').filter(s=>s.eventId===e.id&&(s.profileId===profileId||s.email===email));
    if(previous.some(s=>['pending','approved'].includes(s.status)))fail('A run is already awaiting review or approved for this event.',409);
    if(previous.length&&!e.allowResubmit)fail('Resubmissions are not enabled for this event.');
    const distance=Number(x.distance),seconds=Number(x.seconds);
@@ -188,14 +214,14 @@ export async function handler(req,res){
     const im=readableImage(x.image);upload=im;fingerprint=crypto.createHash('sha256').update(im.bytes).digest('hex');
     if(all('submissions').some(s=>s.fingerprint===fingerprint))flags.push('Screenshot previously submitted');
    }
-   if(!await reserveSubmission(e.id,device,email))fail('A run is already awaiting review or approved for this event.',409);
+   if(!await reserveSubmission(e.id,profileId,email))fail('A run is already awaiting review or approved for this event.',409);
    if(upload){evidence=cloud?uuid():uuid()+'.'+upload.ext;await storeMedia(evidence,upload);}
    if(seconds/distance<150||seconds/distance>1800)flags.push('Unusual pace — check activity details');
-   const s={id:uuid(),eventId:e.id,profileId:device,displayName,email,bib:roster?.bib||'',distance,seconds,activity:x.activity,activityDate:x.activityDate,method:x.method,stravaUrl,evidence,fingerprint,notes:String(x.notes||'').slice(0,2000),status:'pending',flags,reason:'',createdAt:new Date().toISOString()};
-   try{save('profiles',{...(get('profiles',device)||{}),id:device,name:x.name||displayName,displayName,email,country:x.country||'Trinidad & Tobago'});return await json(res,201,save('submissions',s));}catch(error){await releaseSubmission(e.id,device,email);throw error;}
+   const s={id:uuid(),eventId:e.id,profileId:profileId,displayName,email,bib:roster?.bib||'',distance,seconds,activity:x.activity,activityDate:x.activityDate,method:x.method,stravaUrl,evidence,fingerprint,notes:String(x.notes||'').slice(0,2000),status:'pending',flags,reason:'',createdAt:new Date().toISOString()};
+   try{save('profiles',{...(get('profiles',profileId)||{}),id:profileId,name:x.name||displayName,displayName,email,country:x.country||'Trinidad & Tobago'});return await json(res,201,save('submissions',s));}catch(error){await releaseSubmission(e.id,profileId,email);throw error;}
   }
   if(p.startsWith('/api/submissions/')&&method==='GET'){
-   const s=get('submissions',p.split('/').pop());if(!s||s.profileId!==device)fail('Submission not found on this device.',404);return json(res,200,s);
+   const s=get('submissions',p.split('/').pop());if(!s||s.profileId!==profileId)fail('Submission not found on this account.',404);return json(res,200,s);
   }
   // Local management intentionally has no login, as requested. The server binds to loopback only.
   if(p==='/api/admin/state'&&method==='GET')return json(res,200,{events:all('events'),participants:all('participants'),submissions:all('submissions'),settings:get('settings','site')});
@@ -238,10 +264,13 @@ export async function handler(req,res){
    if(!/^https:\/\/www\.instagram\.com\/[\w.]+\/?$/.test(x.instagram))fail('Use a valid Instagram profile URL.');return json(res,200,save('settings',x));
   }
   if(p.startsWith('/api/'))fail('This action was not found.',404);
-  if(p.startsWith('/assets/')||['/app.js','/styles.css','/experience.js','/experience.css','/completion.js'].includes(p)){
+  if(cloud&&p==='/admin'&&session?.role!=='admin'){res.writeHead(302,{Location:'/login?role=admin'});res.end();return;}
+  if(cloud&&/^\/events\/[^/]+\/submit$/.test(p)&&!user){res.writeHead(302,{Location:'/signup'});res.end();return;}
+  if(p.startsWith('/assets/')||['/app.js','/styles.css','/experience.js','/experience.css','/completion.js','/auth.js','/auth.css'].includes(p)){
    const target=path.resolve(root,'public','.'+p);if(!target.startsWith(path.join(root,'public')+path.sep))fail('Not found.',404);return file(res,target);
   }
   if(method!=='GET')fail('Method not allowed.',405);
+  if(p==='/login'||p==='/signup')return file(res,path.join(root,'public','auth.html'),true);
   if(p==='/'||p==='/RISENRUNTT_website.html'||/^\/(events|results|my-runs|profile|how-it-works|about|faq|admin)(\/[^.]*)?$/.test(p))return file(res,path.join(root,'public','index.html'),true);
   fail('Page not found.',404);
  }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.status?e.message:'Something went wrong. Please try again.'});else res.end();if(!e.status)console.error(e);}

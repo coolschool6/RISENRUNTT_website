@@ -1,0 +1,8 @@
+const qs=new URLSearchParams(location.search),mode=location.pathname==='/signup'?'signup':qs.get('role')==='admin'?'admin':'login';
+const $=s=>document.querySelector(s),signup=mode==='signup',admin=mode==='admin';
+$('#eyebrow').textContent=admin?'ORGANIZER ACCESS':signup?'YOUR RUNNER ACCOUNT':'YOUR RUNNER ACCOUNT';
+$('#title').textContent=admin?'Admin sign in.':signup?'Create your account.':'Welcome back.';
+$('#lead').textContent=admin?'Manage events, participant submissions and official results.':signup?'Create an account to submit runs and track their review.':'Sign in to submit a run and follow its review.';
+$('#signup-fields').hidden=!signup;$('#submit').innerHTML=(signup?'Create account':'Sign in')+' <span>↗</span>';
+$('#switch').innerHTML=admin?'Runner? <a href="/login">Sign in to your account</a>':signup?'Already have an account? <a href="/login">Sign in</a>':'New here? <a href="/signup">Create a runner account</a> · <a href="/login?role=admin">Admin sign in</a>';
+$('#auth-form').onsubmit=async event=>{event.preventDefault();const form=new FormData(event.currentTarget),payload=Object.fromEntries(form),error=$('#error'),button=$('#submit');error.textContent='';button.disabled=true;try{const response=await fetch('/api/auth/'+(signup?'signup':'login'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Unable to continue.');if(data.role==='admin')sessionStorage.setItem('risenrun-admin-code',payload.password);location.href=data.role==='admin'?'/admin':'/profile';}catch(err){error.textContent=err.message;button.disabled=false;}};
