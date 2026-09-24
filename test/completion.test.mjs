@@ -13,10 +13,11 @@ test('Submission celebration is honest about pending review',()=>{
   assert.doesNotMatch(page,/FINISH VERIFIED|Your result is official/);
   for(const metric of ['5.02 km','28:42','05:43 /km','23 Sept 2026'])assert.ok(page.includes(metric));
 });
-test('Approved celebration has the verified state and share link',()=>{
+test('Approved celebration has the verified state and private finish link',()=>{
   const page=completionMarkup({...sample,status:'approved'});
   assert.match(page,/FINISH VERIFIED/);
-  assert.match(page,/href="\/results\/qa-run"/);
+  assert.match(page,/href="\/my-runs\/qa-run"/);
+  assert.doesNotMatch(page,/\/results\//);
   assert.doesNotMatch(page,/Awaiting human review/);
 });
 test('Completion content is escaped and does not accept external or unsafe artwork URLs',()=>{

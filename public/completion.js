@@ -17,9 +17,9 @@ export function completionMarkup(data) {
           <div class="received-label">${check}<span>${approved ? 'FINISH VERIFIED' : 'RUN RECEIVED'}</span></div>
           <h1 id="completion-heading">You showed up.<br><em>${approved ? 'It’s official.' : 'That counts.'}</em></h1>
           <p class="finish-personal">Beautiful effort, <strong>${escape(data.name)}.</strong></p>
-          <p class="finish-description">${approved ? 'Your activity has been reviewed and your finish is now part of the official results.' : 'Your run is safely saved. Take a breath, enjoy the moment—we’ll take it from here.'}</p>
+          <p class="finish-description">${approved ? 'Your activity has been reviewed and your finish is officially recorded.' : 'Your run is safely saved. Take a breath, enjoy the moment—we’ll take it from here.'}</p>
           <div class="review-explainer">${approved ? '<span class="review-dot verified"></span><div><strong>Your result is official</strong><small>View your finish and share your result.</small></div>' : '<span class="review-dot"></span><div><strong>Awaiting human review</strong><small>Your result is published only after approval.</small></div>'}</div>
-          <div class="actions finish-actions"><a class="button" href="${approved ? '/results/' + encodeURIComponent(data.id) : '/my-runs'}">${approved ? 'View & share result' : 'Track my submission'} <span aria-hidden="true">↗</span></a><button class="replay-button" type="button" id="replay-celebration"><span aria-hidden="true">↻</span> Replay the moment</button></div>
+          <div class="actions finish-actions"><a class="button" href="${approved ? '/my-runs/' + encodeURIComponent(data.id) : '/my-runs'}">${approved ? 'View your finish' : 'Track my submission'} <span aria-hidden="true">↗</span></a><button class="replay-button" type="button" id="replay-celebration"><span aria-hidden="true">↻</span> Replay the moment</button></div>
           <p class="motion-note hidden" id="motion-note">Motion is reduced to match your device preference.</p>
         </div>
         <div class="finish-visual">
@@ -37,8 +37,8 @@ export function completionMarkup(data) {
   </section>
   <section class="finish-receipt-section"><div class="container">
     <div class="finish-receipt"><div class="receipt-heading"><span class="kicker">A little record of a big effort</span><span class="receipt-status">${approved ? 'VERIFIED ACTIVITY' : 'SUBMITTED ACTIVITY'}</span></div><dl class="receipt-metrics">${metrics.map(([label,value])=>`<div><dt>${label}</dt><dd>${escape(value)}</dd></div>`).join('')}</dl></div>
-    <ol class="finish-tracker" aria-label="Submission progress"><li class="complete"><span>✓</span><div><strong>Run submitted</strong><small>Your activity is safely saved.</small></div></li><li class="${approved ? 'complete' : 'current'}"><span>${approved ? '✓' : '02'}</span><div><strong>${approved ? 'Review completed' : 'Human review'}</strong><small>${approved ? 'Your effort has been checked.' : 'Our team checks your activity.'}</small></div></li><li class="${approved ? 'complete' : ''}"><span>${approved ? '✓' : '03'}</span><div><strong>Official result</strong><small>${approved ? 'Your finish is on the leaderboard.' : 'Published when approved.'}</small></div></li></ol>
-    <div class="finish-bottom"><p>${approved ? 'One finish. Another reason to keep rising.' : 'You can check your progress at any time in My runs.'}</p><a class="text-link" href="${eventPath}${data.eventId ? '/results' : ''}">Event results <span>↗</span></a></div>
+    <ol class="finish-tracker" aria-label="Submission progress"><li class="complete"><span>✓</span><div><strong>Run submitted</strong><small>Your activity is safely saved.</small></div></li><li class="${approved ? 'complete' : 'current'}"><span>${approved ? '✓' : '02'}</span><div><strong>${approved ? 'Review completed' : 'Human review'}</strong><small>${approved ? 'Your effort has been checked.' : 'Our team checks your activity.'}</small></div></li><li class="${approved ? 'complete' : ''}"><span>${approved ? '✓' : '03'}</span><div><strong>Official finish</strong><small>${approved ? 'Your finish is recorded.' : 'Recorded when approved.'}</small></div></li></ol>
+    <div class="finish-bottom"><p>${approved ? 'One finish. Another reason to keep rising.' : 'You can check your progress at any time in My runs.'}</p><a class="text-link" href="/my-runs">My runs <span>↗</span></a></div>
   </div></section>`;
 }
 

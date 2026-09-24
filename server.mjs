@@ -208,7 +208,7 @@ export async function handler(req,res){
   if(p==='/api/me'&&method==='GET'){
    const profile=get('profiles',profileId);return json(res,200,{profile,submissions:all('submissions').filter(s=>s.profileId===profileId),participants:all('participants').filter(x=>profile&&x.email===profile.email)});
   }
-  if(p==='/api/results'&&method==='GET')return json(res,200,results(url.searchParams.get('event')));
+  if(p==='/api/results'&&method==='GET')fail('Page not found.',404);
   if(p==='/api/submissions'&&method==='POST'){
    if(!user)fail('Create an account or sign in before submitting your run.',401);
    const x=await body(req),e=get('events',x.eventId);if(!e||e.status!=='open')fail('This event is not accepting submissions.');
@@ -298,7 +298,8 @@ export async function handler(req,res){
   if(method!=='GET')fail('Method not allowed.',405);
   if(p==='/login'||p==='/signup')return file(res,path.join(root,'public','auth.html'),true);
   if(p==='/forgot-password'||p==='/reset-password'||p==='/account/security')return file(res,path.join(root,'public','recovery.html'),true);
-  if(p==='/'||p==='/RISENRUNTT_website.html'||/^\/(events|results|my-runs|profile|how-it-works|about|faq|admin)(\/[^.]*)?$/.test(p))return file(res,path.join(root,'public','index.html'),true);
+  if(/^\/(results|events\/[^/]+\/results)(?:\/|$)/.test(p))fail('Page not found.',404);
+  if(p==='/'||p==='/RISENRUNTT_website.html'||/^\/(events|my-runs|profile|how-it-works|about|faq|admin)(\/[^.]*)?$/.test(p))return file(res,path.join(root,'public','index.html'),true);
   fail('Page not found.',404);
  }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.status?e.message:'Something went wrong. Please try again.'});else res.end();if(!e.status)console.error(e);}
 }
