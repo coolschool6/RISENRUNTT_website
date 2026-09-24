@@ -21,19 +21,26 @@ CREATE TABLE IF NOT EXISTS settings(id TEXT PRIMARY KEY,body TEXT NOT NULL);`);
 const collections=['events','profiles','participants','submissions','settings'];
 const cloudState=Object.fromEntries(collections.map(key=>[key,new Map()]));
 const dirty=new Map();
-let cloudReady=false;
+let cloudSchemaReady=false;
+const adminAttempts=new Map();
 const siteSeed={name:'Rise & Run TT',tagline:'Encourage fitness & health anywhere.',email:'risenruntt@gmail.com',phone:'18683925275',instagram:'https://www.instagram.com/riserun.tt/',maxUploadMB:10};
 async function ready(){
  if(cloud){
-  if(cloudReady)return;
   const sql=neon(process.env.DATABASE_URL);
-  await sql.query('CREATE TABLE IF NOT EXISTS risenrun_records (collection text NOT NULL, id text NOT NULL, body jsonb NOT NULL, PRIMARY KEY (collection, id))');
-  await sql.query('CREATE TABLE IF NOT EXISTS risenrun_media (id text PRIMARY KEY, bytes bytea NOT NULL, content_type text NOT NULL)');
+  if(!cloudSchemaReady){
+   await sql.query('CREATE TABLE IF NOT EXISTS risenrun_schema_migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
+   await sql.query('CREATE TABLE IF NOT EXISTS risenrun_records (collection text NOT NULL, id text NOT NULL, body jsonb NOT NULL, PRIMARY KEY (collection, id))');
+   await sql.query('CREATE TABLE IF NOT EXISTS risenrun_media (id text PRIMARY KEY, bytes bytea NOT NULL, content_type text NOT NULL)');
+   await sql.query('CREATE TABLE IF NOT EXISTS risenrun_submission_claims (event_id text NOT NULL, profile_id text NOT NULL, email text NOT NULL, PRIMARY KEY (event_id, profile_id), UNIQUE (event_id, email))');
+   await sql.query('INSERT INTO risenrun_schema_migrations (version) VALUES (1) ON CONFLICT DO NOTHING');
+   cloudSchemaReady=true;
+  }
   const rows=await sql.query('SELECT collection, id, body FROM risenrun_records');
+  for(const collection of collections)cloudState[collection].clear();
   for(const row of rows)if(cloudState[row.collection])cloudState[row.collection].set(row.id,typeof row.body==='string'?JSON.parse(row.body):row.body);
   if(!cloudState.events.size)for(const e of seedEvents){cloudState.events.set(e.id,e);dirty.set(`events:${e.id}`,e);}
   if(!cloudState.settings.has('site')){const site={id:'site',...siteSeed};cloudState.settings.set('site',site);dirty.set('settings:site',site);}
-  cloudReady=true;await flush();return;
+  await flush();return;
  }
  if(!db)fail('The production database is not connected yet.',503);
  if(!db.prepare('SELECT COUNT(*) n FROM events').get().n)for(const e of seedEvents)db.prepare('INSERT INTO events VALUES (?,?)').run(e.id,JSON.stringify(e));
@@ -41,8 +48,8 @@ async function ready(){
 }
 async function flush(){
  if(!cloud||!dirty.size)return;
- const sql=neon(process.env.DATABASE_URL),changes=[...dirty.entries()];dirty.clear();
- for(const [key,value] of changes){const [collection,id]=key.split(':');if(value===null)await sql.query('DELETE FROM risenrun_records WHERE collection = $1 AND id = $2',[collection,id]);else await sql.query('INSERT INTO risenrun_records (collection,id,body) VALUES ($1,$2,$3::jsonb) ON CONFLICT (collection,id) DO UPDATE SET body=EXCLUDED.body',[collection,id,JSON.stringify(value)]);}
+ const sql=neon(process.env.DATABASE_URL),changes=[...dirty.entries()];
+ for(const [key,value] of changes){const [collection,id]=key.split(':');if(value===null)await sql.query('DELETE FROM risenrun_records WHERE collection = $1 AND id = $2',[collection,id]);else await sql.query('INSERT INTO risenrun_records (collection,id,body) VALUES ($1,$2,$3::jsonb) ON CONFLICT (collection,id) DO UPDATE SET body=EXCLUDED.body',[collection,id,JSON.stringify(value)]);dirty.delete(key);}
 }
 const all=t=>cloud?[...cloudState[t].values()]:db.prepare(`SELECT body FROM ${t}`).all().map(x=>JSON.parse(x.body));
 const get=(t,id)=>cloud?(cloudState[t].get(id)||null):(()=>{const r=db.prepare(`SELECT body FROM ${t} WHERE id=?`).get(id);return r?JSON.parse(r.body):null;})();
@@ -55,15 +62,24 @@ const save=(t,x)=>{
  return x;
 };
 const remove=(t,id)=>{if(cloud){cloudState[t].delete(id);dirty.set(`${t}:${id}`,null);}else db.prepare(`DELETE FROM ${t} WHERE id=?`).run(id);};
+async function reserveSubmission(eventId,profileId,email){
+ if(!cloud)return true;
+ const sql=neon(process.env.DATABASE_URL),result=await sql.query('INSERT INTO risenrun_submission_claims (event_id,profile_id,email) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING event_id',[eventId,profileId,email]);
+ return result.length===1;
+}
+async function releaseSubmission(eventId,profileId,email){if(cloud)await neon(process.env.DATABASE_URL).query('DELETE FROM risenrun_submission_claims WHERE event_id=$1 AND (profile_id=$2 OR email=$3)',[eventId,profileId,email]);}
 const fail=(message,status=400)=>{throw Object.assign(new Error(message),{status});};
 const required=(value,label,max=500)=>{if(typeof value!=='string'||!value.trim()||value.length>max)fail(`${label} is required (maximum ${max} characters).`);return value.trim();};
 const dateValid=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&!Number.isNaN(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Port_of_Spain'}).format(new Date());
 const uuid=()=>crypto.randomUUID();
 const adminSignature=()=>process.env.ADMIN_PASSWORD?crypto.createHmac('sha256',process.env.ADMIN_PASSWORD).update('rise-run-admin').digest('hex'):'';
+const sameHostOrigin=(origin,host)=>origin===`http://${host}`||origin===`https://${host}`;
+const requestAddress=req=>(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').toString().split(',')[0].trim();
+function allowAdminAttempt(req){const key=requestAddress(req),now=Date.now(),attempts=(adminAttempts.get(key)||[]).filter(t=>now-t<15*60*1000);if(attempts.length>=10)return false;attempts.push(now);adminAttempts.set(key,attempts);return true;}
 const emailValid=s=>typeof s==='string'&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)&&s.length<255;
 const publicResult=s=>({id:s.id,eventId:s.eventId,displayName:s.displayName,distance:s.distance,seconds:s.seconds,activityDate:s.activityDate,activity:s.activity,createdAt:s.reviewedAt});
-const results=id=>all('submissions').filter(s=>s.status==='approved'&&(!id||s.eventId===id)).sort((a,b)=>a.seconds-b.seconds).map((s,i)=>({...publicResult(s),rank:i+1}));
+const results=id=>all('submissions').filter(s=>s.status==='approved'&&(!id||s.eventId===id)).sort((a,b)=>a.seconds-b.seconds||String(a.reviewedAt||a.createdAt).localeCompare(String(b.reviewedAt||b.createdAt))||a.id.localeCompare(b.id)).map((s,i)=>({...publicResult(s),rank:i+1}));
 const readableImage=(data)=>{
  if(typeof data!=='string')fail('Choose an image.');
  const match=/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(data);
@@ -121,7 +137,7 @@ export async function handler(req,res){
  try{
   const host=req.headers.host||'';
   if(!cloud&&!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host))fail('Local access only.',403);
-  if(req.headers.origin&&!['http://'+host].includes(req.headers.origin))fail('Requests must originate from this website.',403);
+  if(req.headers.origin&&!sameHostOrigin(req.headers.origin,host))fail('Requests must originate from this website.',403);
   await ready();
   res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
   const url=new URL(req.url,'http://'+host),p=decodeURIComponent(url.pathname),method=req.method;
@@ -132,7 +148,7 @@ export async function handler(req,res){
    if(!process.env.ADMIN_PASSWORD)fail('Admin access is not configured. Add ADMIN_PASSWORD in Vercel project settings.',503);
    const saved=cookies.match(/(?:^|;\s*)rr_admin=([a-f0-9]+)(?:;|$)/)?.[1],provided=req.headers['x-risenrun-admin'];
    if(provided===process.env.ADMIN_PASSWORD)addCookie(`rr_admin=${adminSignature()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800; Secure`);
-   else if(saved!==adminSignature())fail('Admin access code required.',401);
+   else if(saved!==adminSignature()){if(!allowAdminAttempt(req))fail('Too many admin access attempts. Try again in 15 minutes.',429);fail('Admin access code required.',401);}
   }
   if(p==='/api/site'&&method==='GET')return json(res,200,get('settings','site'));
   if(p==='/api/events'&&method==='GET')return json(res,200,all('events').filter(e=>e.status!=='draft'));
@@ -162,21 +178,21 @@ export async function handler(req,res){
    if((e.startDate&&x.activityDate<e.startDate)||(e.endDate&&x.activityDate>e.endDate))fail('Your activity must be inside the event window.');
    if(!e.methods.includes(x.method))fail('This submission method is not accepted.');
    if(x.consent!==true)fail('Confirm that this is your activity and you agree to publish your display name and result.');
-   let evidence='',stravaUrl='',fingerprint='',flags=[];
+   let evidence='',stravaUrl='',fingerprint='',flags=[],upload=null;
    if(x.method==='strava'){
     let u;try{u=new URL(x.stravaUrl);}catch{fail('Enter a valid Strava activity URL.');}
     if(!['strava.com','www.strava.com'].includes(u.hostname)||u.protocol!=='https:'||!/^\/activities\/\d+\/?$/.test(u.pathname)||u.username||u.password)fail('Use https://www.strava.com/activities/ followed by an activity number.');
     stravaUrl='https://www.strava.com'+u.pathname.replace(/\/$/,'');
     if(all('submissions').some(s=>s.stravaUrl===stravaUrl&&s.status!=='rejected'))fail('This Strava activity has already been submitted.',409);
    }else{
-    const im=readableImage(x.image);fingerprint=crypto.createHash('sha256').update(im.bytes).digest('hex');
+    const im=readableImage(x.image);upload=im;fingerprint=crypto.createHash('sha256').update(im.bytes).digest('hex');
     if(all('submissions').some(s=>s.fingerprint===fingerprint))flags.push('Screenshot previously submitted');
-    evidence=cloud?uuid():uuid()+'.'+im.ext;await storeMedia(evidence,im);
    }
+   if(!await reserveSubmission(e.id,device,email))fail('A run is already awaiting review or approved for this event.',409);
+   if(upload){evidence=cloud?uuid():uuid()+'.'+upload.ext;await storeMedia(evidence,upload);}
    if(seconds/distance<150||seconds/distance>1800)flags.push('Unusual pace — check activity details');
    const s={id:uuid(),eventId:e.id,profileId:device,displayName,email,bib:roster?.bib||'',distance,seconds,activity:x.activity,activityDate:x.activityDate,method:x.method,stravaUrl,evidence,fingerprint,notes:String(x.notes||'').slice(0,2000),status:'pending',flags,reason:'',createdAt:new Date().toISOString()};
-   save('profiles',{...(get('profiles',device)||{}),id:device,name:x.name||displayName,displayName,email,country:x.country||'Trinidad & Tobago'});
-   return json(res,201,save('submissions',s));
+   try{save('profiles',{...(get('profiles',device)||{}),id:device,name:x.name||displayName,displayName,email,country:x.country||'Trinidad & Tobago'});return await json(res,201,save('submissions',s));}catch(error){await releaseSubmission(e.id,device,email);throw error;}
   }
   if(p.startsWith('/api/submissions/')&&method==='GET'){
    const s=get('submissions',p.split('/').pop());if(!s||s.profileId!==device)fail('Submission not found on this device.',404);return json(res,200,s);
@@ -203,7 +219,7 @@ export async function handler(req,res){
    if(x.status==='rejected')x.reason=required(x.reason,'Rejection reason',1000);
    if(x.seconds!==undefined){const n=Number(x.seconds);if(!Number.isInteger(n)||n<1||n>172800)fail('Enter a valid time.');s.seconds=n;}
    if(x.distance!==undefined){const n=Number(x.distance),e=get('events',s.eventId);if(!Number.isFinite(n)||n<e.minDistance||n>e.maxDistance)fail('Distance is outside the event limits.');s.distance=n;}
-   s.status=x.status;s.reason=x.status==='rejected'?x.reason:'';s.reviewedAt=new Date().toISOString();return json(res,200,save('submissions',s));
+   s.status=x.status;s.reason=x.status==='rejected'?x.reason:'';s.reviewedAt=new Date().toISOString();if(x.status==='rejected')await releaseSubmission(s.eventId,s.profileId,s.email);return json(res,200,save('submissions',s));
   }
   if(p==='/api/admin/participants'&&method==='POST')return json(res,201,save('participants',participant(await body(req))));
   if(/^\/api\/admin\/participants\/[^/]+$/.test(p)&&method==='PUT'){
@@ -212,6 +228,7 @@ export async function handler(req,res){
   if(p==='/api/admin/import'&&method==='POST'){
    const input=await body(req);if(!Array.isArray(input.rows)||!input.rows.length||input.rows.length>2000)fail('Upload between 1 and 2,000 participants.');
    const seen=new Set();const rows=input.rows.map((x,i)=>{try{const r=participant(x),key=r.eventId+':'+r.email;if(seen.has(key))fail('Duplicate participant in CSV.');seen.add(key);return r;}catch(e){fail(`Row ${i+2}: ${e.message}`);}});
+   if(cloud){rows.forEach(r=>save('participants',r));return json(res,201,{count:rows.length});}
    db.exec('BEGIN');try{rows.forEach(r=>save('participants',r));db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}return json(res,201,{count:rows.length});
   }
   if(p==='/api/admin/settings'&&method==='PUT'){
