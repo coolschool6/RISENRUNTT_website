@@ -228,4 +228,5 @@ export async function handler(req,res){
   fail('Page not found.',404);
  }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.status?e.message:'Something went wrong. Please try again.'});else res.end();if(!e.status)console.error(e);}
 }
+export default handler;
 if(!process.env.VERCEL){const server=http.createServer(handler);server.listen(Number(process.env.PORT||4173),'127.0.0.1',()=>console.log(`Rise & Run TT: http://localhost:${process.env.PORT||4173} — local storage ready`));}
