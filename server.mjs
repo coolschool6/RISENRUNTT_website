@@ -85,7 +85,7 @@ const sessionFrom=(cookies)=>{const m=cookies.match(/(?:^|;\s*)rr_session=([a-f0
 const tokenHash=token=>crypto.createHash('sha256').update(token).digest('hex');
 const mailReady=()=>Boolean(process.env.RESEND_API_KEY&&process.env.MAIL_FROM);
 async function sendAccountEmail(to,subject,html){if(!mailReady())return false;const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${process.env.RESEND_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({from:process.env.MAIL_FROM,to:[to],subject,html})});if(!response.ok)throw new Error('The email provider could not deliver this message.');return true;}
-const publicUser=user=>({id:user.id,name:user.name,displayName:user.displayName,email:user.email,createdAt:user.createdAt,emailVerified:Boolean(user.emailVerified)});
+const publicUser=user=>({id:user.id,name:user.name,displayName:user.displayName,email:user.email,createdAt:user.createdAt});
 const sameHostOrigin=(origin,host)=>origin===`http://${host}`||origin===`https://${host}`;
 const requestAddress=req=>(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').toString().split(',')[0].trim();
 function allowAdminAttempt(req){const key=requestAddress(req),now=Date.now(),attempts=(adminAttempts.get(key)||[]).filter(t=>now-t<15*60*1000);if(attempts.length>=10)return false;attempts.push(now);adminAttempts.set(key,attempts);return true;}
@@ -163,7 +163,7 @@ export async function handler(req,res){
    if(!sessionSecret())fail('Account setup is not configured yet.',503);
    const x=await body(req),name=required(x.name,'Name',120),displayName=required(x.displayName,'Display name',80),email=required(x.email,'Email',254).toLowerCase(),password=required(x.password,'Password',200);
    if(!emailValid(email))fail('Enter a valid email.');if(password.length<8)fail('Choose a password with at least 8 characters.');if(all('users').some(existing=>existing.email===email)||email===String(process.env.ADMIN_EMAIL||'').toLowerCase())fail('An account already exists for this email.',409);
-   const newUser={id:uuid(),name,displayName,email,passwordHash:await hashPassword(password),createdAt:new Date().toISOString(),emailVerified:false};save('users',newUser);save('profiles',{id:newUser.id,name,displayName,email,country:String(x.country||'Trinidad & Tobago').slice(0,100)});setSession(newUser.id,'user');return json(res,201,publicUser(newUser));
+   const newUser={id:uuid(),name,displayName,email,passwordHash:await hashPassword(password),createdAt:new Date().toISOString()};save('users',newUser);save('profiles',{id:newUser.id,name,displayName,email,country:String(x.country||'Trinidad & Tobago').slice(0,100)});setSession(newUser.id,'user');return json(res,201,publicUser(newUser));
   }
   if(p==='/api/auth/login'&&method==='POST'){
    if(!sessionSecret())fail('Account setup is not configured yet.',503);
@@ -177,13 +177,6 @@ export async function handler(req,res){
   }
   if(p==='/api/auth/password-reset/confirm'&&method==='POST'){
    const x=await body(req),token=required(x.token,'Reset token',200),password=required(x.password,'Password',200),found=all('users').find(candidate=>candidate.resetTokenHash===tokenHash(token)&&Number(candidate.resetTokenExpires)>Date.now());if(!found)fail('This password-reset link is invalid or has expired.',400);if(password.length<8)fail('Choose a password with at least 8 characters.');found.passwordHash=await hashPassword(password);delete found.resetTokenHash;delete found.resetTokenExpires;save('users',found);setSession(found.id,'user');return json(res,200,{ok:true});
-  }
-  if(p==='/api/auth/verification/request'&&method==='POST'){
-   if(!user)fail('Sign in to verify your email.',401);if(user.emailVerified)return json(res,200,{ok:true});if(!mailReady())fail('Email verification delivery is not configured yet. Ask the organizer to add the mail service key.',503);
-   const token=crypto.randomBytes(32).toString('hex');user.verifyTokenHash=tokenHash(token);user.verifyTokenExpires=Date.now()+86400000;save('users',user);const link=`${cloud?'https':'http'}://${host}/verify-email?token=${token}`;await sendAccountEmail(user.email,'Verify your Rise & Run TT email',`<p>Confirm this email address within 24 hours:</p><p><a href="${link}">Verify email</a></p>`);return json(res,200,{ok:true});
-  }
-  if(p==='/api/auth/verification/confirm'&&method==='POST'){
-   const x=await body(req),token=required(x.token,'Verification token',200),found=all('users').find(candidate=>candidate.verifyTokenHash===tokenHash(token)&&Number(candidate.verifyTokenExpires)>Date.now());if(!found)fail('This verification link is invalid or has expired.',400);found.emailVerified=true;delete found.verifyTokenHash;delete found.verifyTokenExpires;save('users',found);return json(res,200,{ok:true});
   }
   if(p==='/api/auth/password/change'&&method==='POST'){
    if(!user)fail('Sign in to change your password.',401);const x=await body(req),current=required(x.currentPassword,'Current password',200),next=required(x.newPassword,'New password',200);if(!await passwordMatches(current,user.passwordHash))fail('Your current password is incorrect.',401);if(next.length<8)fail('Choose a password with at least 8 characters.');user.passwordHash=await hashPassword(next);save('users',user);return json(res,200,{ok:true});
@@ -246,7 +239,6 @@ export async function handler(req,res){
   }
   // Local management intentionally has no login, as requested. The server binds to loopback only.
   if(p==='/api/admin/state'&&method==='GET')return json(res,200,{events:all('events'),participants:all('participants'),submissions:all('submissions'),users:all('users').map(publicUser),settings:get('settings','site')});
-  if(/^\/api\/admin\/users\/[^/]+$/.test(p)&&method==='PATCH'){const id=p.split('/').pop(),target=get('users',id),x=await body(req);if(!target)fail('User not found.',404);if(typeof x.emailVerified==='boolean')target.emailVerified=x.emailVerified;return json(res,200,publicUser(save('users',target)));}
   if(p==='/api/admin/events'&&method==='POST')return json(res,201,save('events',validateEvent(await body(req))));
   if(/^\/api\/admin\/events\/[^/]+$/.test(p)){
    const id=p.split('/').pop(),e=get('events',id);if(!e)fail('Event not found.',404);
@@ -293,7 +285,7 @@ export async function handler(req,res){
   }
   if(method!=='GET')fail('Method not allowed.',405);
   if(p==='/login'||p==='/signup')return file(res,path.join(root,'public','auth.html'),true);
-  if(p==='/forgot-password'||p==='/reset-password'||p==='/verify-email'||p==='/account/security')return file(res,path.join(root,'public','recovery.html'),true);
+  if(p==='/forgot-password'||p==='/reset-password'||p==='/account/security')return file(res,path.join(root,'public','recovery.html'),true);
   if(p==='/'||p==='/RISENRUNTT_website.html'||/^\/(events|results|my-runs|profile|how-it-works|about|faq|admin)(\/[^.]*)?$/.test(p))return file(res,path.join(root,'public','index.html'),true);
   fail('Page not found.',404);
  }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.status?e.message:'Something went wrong. Please try again.'});else res.end();if(!e.status)console.error(e);}

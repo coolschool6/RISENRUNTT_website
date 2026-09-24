@@ -1,5 +1,5 @@
-const html = (signedIn, role, verified = true) => signedIn
-  ? `<a class="account-dashboard" href="${role === 'admin' ? '/admin' : '/profile'}">${role === 'admin' ? 'Admin' : 'My account'}</a>${role === 'user' ? '<a class="account-login" href="/account/security">Security</a>' : ''}${role === 'user' && !verified ? '<a class="account-login" href="/verify-email">Verify email</a>' : ''}<button class="account-logout" type="button">Log out</button>`
+const html = (signedIn, role) => signedIn
+  ? `<a class="account-dashboard" href="${role === 'admin' ? '/admin' : '/profile'}">${role === 'admin' ? 'Admin' : 'My account'}</a>${role === 'user' ? '<a class="account-login" href="/account/security">Security</a>' : ''}<button class="account-logout" type="button">Log out</button>`
   : '<a class="account-login" href="/login">Log in</a><a class="account-signup" href="/signup">Sign up</a>';
 
 export async function initAccountNavigation() {
@@ -13,7 +13,7 @@ export async function initAccountNavigation() {
   try {
     const response = await fetch('/api/auth/session', {credentials: 'same-origin'});
     const account = response.ok ? await response.json() : null;
-    if (account?.authenticated) slot.innerHTML = html(true, account.role, account.user?.emailVerified);
+    if (account?.authenticated) slot.innerHTML = html(true, account.role);
   } catch { /* Keep the sign-in links available if the status check is unavailable. */ }
   slot.querySelector('.account-logout')?.addEventListener('click', async () => {
     await fetch('/api/auth/logout', {method: 'POST', credentials: 'same-origin'});
