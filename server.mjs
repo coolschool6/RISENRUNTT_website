@@ -27,9 +27,9 @@ async function ready(){
  if(cloud){
   if(cloudReady)return;
   const sql=neon(process.env.DATABASE_URL);
-  await sql('CREATE TABLE IF NOT EXISTS risenrun_records (collection text NOT NULL, id text NOT NULL, body jsonb NOT NULL, PRIMARY KEY (collection, id))');
-  await sql('CREATE TABLE IF NOT EXISTS risenrun_media (id text PRIMARY KEY, bytes bytea NOT NULL, content_type text NOT NULL)');
-  const rows=await sql('SELECT collection, id, body FROM risenrun_records');
+  await sql.query('CREATE TABLE IF NOT EXISTS risenrun_records (collection text NOT NULL, id text NOT NULL, body jsonb NOT NULL, PRIMARY KEY (collection, id))');
+  await sql.query('CREATE TABLE IF NOT EXISTS risenrun_media (id text PRIMARY KEY, bytes bytea NOT NULL, content_type text NOT NULL)');
+  const rows=await sql.query('SELECT collection, id, body FROM risenrun_records');
   for(const row of rows)if(cloudState[row.collection])cloudState[row.collection].set(row.id,typeof row.body==='string'?JSON.parse(row.body):row.body);
   if(!cloudState.events.size)for(const e of seedEvents){cloudState.events.set(e.id,e);dirty.set(`events:${e.id}`,e);}
   if(!cloudState.settings.has('site')){const site={id:'site',...siteSeed};cloudState.settings.set('site',site);dirty.set('settings:site',site);}
@@ -42,7 +42,7 @@ async function ready(){
 async function flush(){
  if(!cloud||!dirty.size)return;
  const sql=neon(process.env.DATABASE_URL),changes=[...dirty.entries()];dirty.clear();
- for(const [key,value] of changes){const [collection,id]=key.split(':');if(value===null)await sql('DELETE FROM risenrun_records WHERE collection = $1 AND id = $2',[collection,id]);else await sql('INSERT INTO risenrun_records (collection,id,body) VALUES ($1,$2,$3::jsonb) ON CONFLICT (collection,id) DO UPDATE SET body=EXCLUDED.body',[collection,id,JSON.stringify(value)]);}
+ for(const [key,value] of changes){const [collection,id]=key.split(':');if(value===null)await sql.query('DELETE FROM risenrun_records WHERE collection = $1 AND id = $2',[collection,id]);else await sql.query('INSERT INTO risenrun_records (collection,id,body) VALUES ($1,$2,$3::jsonb) ON CONFLICT (collection,id) DO UPDATE SET body=EXCLUDED.body',[collection,id,JSON.stringify(value)]);}
 }
 const all=t=>cloud?[...cloudState[t].values()]:db.prepare(`SELECT body FROM ${t}`).all().map(x=>JSON.parse(x.body));
 const get=(t,id)=>cloud?(cloudState[t].get(id)||null):(()=>{const r=db.prepare(`SELECT body FROM ${t} WHERE id=?`).get(id);return r?JSON.parse(r.body):null;})();
@@ -77,11 +77,11 @@ const readableImage=(data)=>{
 };
 const imagePath=s=>typeof s==='string'&&/^\/(assets\/[\w.-]+|media\/[\w.-]+|api\/media\/[\w.-]+)$/.test(s);
 async function storeMedia(id,image){
- if(cloud){const sql=neon(process.env.DATABASE_URL);await sql('INSERT INTO risenrun_media (id,bytes,content_type) VALUES ($1,$2,$3) ON CONFLICT (id) DO UPDATE SET bytes=EXCLUDED.bytes,content_type=EXCLUDED.content_type',[id,image.bytes,`image/${image.ext==='jpg'?'jpeg':image.ext}`]);return;}
+ if(cloud){const sql=neon(process.env.DATABASE_URL);await sql.query('INSERT INTO risenrun_media (id,bytes,content_type) VALUES ($1,$2,$3) ON CONFLICT (id) DO UPDATE SET bytes=EXCLUDED.bytes,content_type=EXCLUDED.content_type',[id,image.bytes,`image/${image.ext==='jpg'?'jpeg':image.ext}`]);return;}
  fs.writeFileSync(path.join(dataDir,'uploads',id),image.bytes);
 }
 async function sendMedia(res,id,privateFile=false){
- if(cloud){const sql=neon(process.env.DATABASE_URL),rows=await sql('SELECT bytes,content_type FROM risenrun_media WHERE id=$1',[id]);if(!rows.length)fail('File not found.',404);res.writeHead(200,{'Content-Type':rows[0].content_type,'Cache-Control':privateFile?'no-store':'public, max-age=3600'});res.end(Buffer.from(rows[0].bytes));return;}
+ if(cloud){const sql=neon(process.env.DATABASE_URL),rows=await sql.query('SELECT bytes,content_type FROM risenrun_media WHERE id=$1',[id]);if(!rows.length)fail('File not found.',404);res.writeHead(200,{'Content-Type':rows[0].content_type,'Cache-Control':privateFile?'no-store':'public, max-age=3600'});res.end(Buffer.from(rows[0].bytes));return;}
  const match=/^(.+)\.(jpg|png|webp)$/.exec(id);if(!match)fail('File not found.',404);return file(res,path.join(dataDir,'uploads',id),privateFile);
 }
 function validateEvent(input,existing){
